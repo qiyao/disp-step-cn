@@ -1,0 +1,329 @@
+\documentclass[cjk]{beamer}  % 使用Beamer包
+%\hypersetup{pdfpagemode=FullScreen}
+\usepackage{CJK}   % 中文环境
+\usepackage{indentfirst}
+%\usepackage{beamerthemesplit}
+
+\usepackage{makeidx}
+%\usepackage[dvipdfm,CJKbookmarks,bookmarks=true,bookmarksnumbered=true]{hyperref}
+%\usepackage[CJKbookmarks,bookmarks=true,bookmarksnumbered=true]{hyperref}
+\usepackage{listings}
+\usepackage{verbatim}
+
+\hypersetup{colorlinks, linkcolor=blue, citecolor=blue,
+    urlcolor=blue,
+    plainpages=flase,
+    pdfcreator=tex,
+    bookmarksopen=true,
+    pdfhighlight=/P,
+    pdfauthor={Yao Qi <qiyaoltc@gmail.com>},
+    pdfcreator={cTeX},
+%    pdftitle={iptables 入门},
+%    pdfkeywords={iptables 入门 Rae szlug},
+    pdfstartview=FitH,
+    pdfpagemode=UseOutlines,%UseOutlines, %None, FullScreen, UseThumbs
+}
+
+%\usepackage[all,bottom]{draftcopy}
+%\draftcopyName{Copyright by Rae <crquan@gmail.com>, 2006}{50}
+%\draftcopySetGrey{0.8} \draftcopyPageTransform{55 rotate}
+%\draftcopyPageX{80}\draftcopyPageY{-25}
+
+\lstset{
+  basicstyle=\tiny,          % print whole listing small
+  showstringspaces=false,
+  numbers=left,
+  numberstyle=\tiny,
+  % labelstep=1,
+  % commentstyle=\textsl,
+  keywordstyle=\color{green}\bfseries\underbar,     % underlined bold red keywords
+  identifierstyle={},         % nothing happens to other identifiers
+  commentstyle=\mdseries\color{blue}, % white comments
+  stringstyle=\color{red}\ttfamily}      % typewriter type for strings
+% stringspaces=false}         % no special string spaces
+
+
+
+%\usetheme{Madrid}  % 采用的主题
+\usetheme{Warsaw}
+%\usetheme{Rochester}
+%\usetheme{Berkeley}
+%\usetheme{PaloAlto}
+%\usetheme{Montpellier}
+%\usetheme{Berlin}
+%\usetheme{Ilmenau}
+%\usetheme{Dresden}
+
+%\usecolortheme{albatross} % 采用的配色。
+%\usecolortheme{beaver} white background
+%\usecolortheme{beetle}
+%\usecolortheme{dolphin}
+%\usecolortheme{fly}
+%\usecolortheme{lily}
+
+%\useoutertheme{tree}
+
+\usefonttheme{structureitalicserif}
+
+\begin{document}
+\begin{CJK}{UTF8}{gbsn}
+
+\title{Displaced stepping in GDB and its implementation in Thumb-2}
+\author{\href{mailto:qiyaoltc@gmail.com}{齐尧}}
+\date{HelloGCC 2011 \\ \today}
+
+% 生成上面定义的"\title", "\author", "\date"等信息
+\frame{\titlepage}
+
+
+% 生成目录菜单
+\section{目录及流程}
+\frame{
+    \tableofcontents
+}
+
+\section{关于我的话题}
+
+\begin{frame}
+  \frametitle{在这四十分钟里边}
+  \begin{columns}
+    \column{5cm}
+    \begin{overprint}
+
+      \begin{block}{你能知道的}
+        \begin{itemize}
+        \item 我叫齐尧 \href{mailto:qiyaoltc@gmail.com}{qiyaoltc@gmail.com}
+        \item 什么是displaced stepping
+        \item 如何为一些新的指令支持displaced stepping
+        \item 将来的多核或者多线程调试可能是什么样子
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+
+    \column{5cm}
+    \begin{overprint}
+      \begin{block}{你不可能知道的}
+        \begin{itemize}
+        \item GDB里边的displaced stepping 的代码到底是怎样做的
+        \item GDB里边的displaced stepping 为什么设计成这个样子
+        \item 为了多核或者多线程调试，具体应该做什么
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+  \end{columns}
+\end{frame}
+
+\section{ Displaced stepping }
+
+\subsection{什么是displaced stepping?}
+\frame{
+  \frametitle{什么是in-place stepping?}
+
+\begin{figure}
+  \includegraphics{../../book/breakpoint/break.4}\hfill
+  \includegraphics{../../book/breakpoint/break.5}\hfill
+  \includegraphics{../../book/breakpoint/break.6}\hfill
+  \includegraphics{../../book/breakpoint/break.2}
+  \caption{in-place stepping}
+  \label{fig:inplace}
+\end{figure}
+
+in-place stepping 的问题 （我在HellGCC 2010讲过了）
+  \begin{itemize}
+  \item GDB 和其它调试器的缺省和基本方式
+  \item 不适合调试多线程程序
+  \item 对程序的干扰比较大
+  \end{itemize}
+}
+
+\frame{
+  \frametitle{什么是displaced stepping?}
+
+\begin{figure}
+  \includegraphics[height=2.5cm]{../../book/breakpoint/break.4}\hfill
+  \includegraphics[height=3cm]{../../book/breakpoint/break.7}\hfill
+  \includegraphics[height=2.5cm]{../../book/breakpoint/break.8}
+  \caption{displaced stepping}
+  \label{fig:inplace}
+\end{figure}
+
+displaced stepping 的考虑
+  \begin{itemize}
+  \item 把和inst.b\textbf{等价}的指令inst.b1,inst.b2拷贝到\texttt{scratch pad}，然后执行。
+  \item 如何保证 inst.b == inst.b1 + inst.b2？
+  \item \texttt{scratch pad}在哪里？
+  \end{itemize}
+
+}
+\subsection{Displaced stepping的设计考虑}
+\frame{
+  \frametitle{Displaced stepping的设计考虑}
+
+  \begin{columns}
+    \column{3cm}
+    \begin{overprint}
+      \begin{block}{}
+        \begin{figure}
+          \includegraphics[height=4cm]{../../book/breakpoint/break.9}
+        \end{figure}
+      \end{block}
+    \end{overprint}
+
+    \column{7cm}
+    \begin{overprint}
+      \begin{block}{设计考虑}
+        \begin{itemize}
+          \item 在内存空间中找到一段，可以执行代码，同时不能影响到程序其他部分的执行；\texttt{\_start}；
+          \item 对于任意一条指令inst.b，找到若干条与其在语义上完全一致的指令；和位置无关的指令是可以直接替代的，比如\texttt{mov r0, r1};
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+
+  \end{columns}
+}
+    
+\section{Displaced stepping在GDB中的实现}
+
+\subsection{Displaced stepping in GDB}
+\frame{
+  \frametitle{Displaced stepping in GDB}
+
+  \begin{overprint}
+
+    \begin{block}{过程}
+      \begin{itemize}
+      \item 确定scratchpad的位置和长度 {\color{blue}\texttt{gdbarch\_max\_insn\_length}} {\color{blue}\texttt{gdbarch\_displaced\_step\_location}}
+      \item 保存scratch pad内容，准备把需要的指令拷贝过去
+      \item 分析当前指令，生成需要拷贝到scratch pad的指令，并且保存需要的寄存器  {\color{blue}\texttt{gdbarch\_displaced\_step\_copy\_insn}}
+      \item 拷贝指令到scratch pad，加上断点指令。设置pc，让程序继续执行
+      \item 命中断点后，恢复scratch pad，进行cleanup，恢复寄存器等等。{\color{blue}\texttt{gdbarch\_displaced\_step\_fixup}}
+      \end{itemize}
+    \end{block}
+
+  \end{overprint}
+
+}
+
+\subsection{Displaced stepping for Thumb-2}
+\begin{frame}[fragile]
+  \frametitle{Displaced stepping for Thumb-2}
+
+  \begin{itemize}
+  \item 指令解码
+  \item 选择替代指令
+  \item 选择合适的cleanup操作
+  \end{itemize}
+
+  \begin{columns}
+    \column{7cm}
+    \begin{overprint}
+      \begin{block}{\texttt{LDR Rd \#imm8}}
+        \begin{itemize}
+        \item 选择替代指令 \texttt{LDR R0, [R2, R3]}
+        \item 保存\texttt{R0}, \texttt{R2}, 和\texttt{R3}，
+        \item 在\texttt{R2}写入PC，在\texttt{R3}中写入\texttt{\#imm8}
+        \item 在scratchpad执行 \texttt{LDR R0, [R2, R3]}
+        \item 把\texttt{R0}的内容读出，写到\texttt{Rd}，恢复\texttt{R0}, \texttt{R2}, 和\texttt{R3}。
+        \end{itemize}
+
+      \end{block}
+    \end{overprint}
+
+    \column{4.5cm}
+    \begin{overprint}
+      \begin{block}{\texttt{BL \#imm}}
+        \begin{itemize}
+        \item 选在替代指令 \texttt{NOP}
+        \item 计算目标地址\texttt{DEST}
+        \item 在scratchpad执行 \texttt{NOP}
+        \item 把\texttt{PC}的内容设置为\texttt{DEST}，同时更新\texttt{LR}
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+  \end{columns} 
+\end{frame}
+
+\frame{
+  \frametitle{Displaced stepping for Thumb-2}
+    \begin{columns}
+    \column{5cm}
+    \begin{overprint}
+      \begin{block}{实现工作}
+        \begin{itemize}
+        \item 把每一条\texttt{Thumb}指令，做上一页的分析和操作，用代码实现。
+        \item 代码量在两千行
+        \item 从\texttt{2010-12} 到 \texttt{2011-09}
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+
+    \column{6.5cm}
+    \begin{overprint}
+      \begin{block}{总结经验}
+        \begin{itemize}
+        \item 需要十分熟悉处理器的指令
+        \item 需要及其细心地阅读指令手册
+        \item 和社区打交到的经验
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+  \end{columns} 
+}
+
+\section{Displaced stepping 的用途}
+\subsection{Non-stop}
+\frame{
+  \frametitle{Non-stop}
+}
+
+\section{多线程调试或者多核处理器调试展望}
+\frame{
+  \frametitle{多线程调试或者多核处理器调试展望}
+
+  \begin{columns}
+    \column{5cm}
+    \begin{overprint}
+      \begin{block}{传统调试 vs 多核多线程}
+        \begin{itemize}
+        \item 传统调试基于这样的假设：
+          \begin{itemize}
+          \item 错误可重现
+          \item 调试对程序无干扰或者少干扰
+          \end{itemize}
+        \item 多核多线程程序：
+          \begin{itemize}
+          \item 不确定性，问题也许不能重现
+          \item 常规的测试没有意义，或者意义减少
+          \end{itemize}
+        \end{itemize}
+      \end{block}
+    \end{overprint}
+
+    \column{6.5cm}
+    \begin{overprint}
+    \begin{block}{调试手段的变化（个人愚见）}
+      \begin{itemize}
+      \item 更多的tracing， 更少的peeking。采用高效的trace，采集数据。
+      \item 更多的有算法的分析，更少的手工检查。利用先进的算法分析采集到的数据，推倒出程序中的问题。
+      \item 更多的\textbf{工具引导人}，更少的\textbf{人使用工具}。由工具重现问题的环境，然后再有人去检查程序的问题。
+      \item visualization和重新定义\textbf{程序性能}和profiling。
+      \end{itemize}
+    \end{block}
+
+    \end{overprint}
+  \end{columns}
+}
+
+\frame{
+  \frametitle{The End}
+
+    \begin{overprint}
+
+    \begin{block}{\texttt{Q \& A}}
+    \end{block}
+
+  \end{overprint}
+}
+
+\end{CJK}
+\end{document}
